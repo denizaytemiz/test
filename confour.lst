@@ -1,0 +1,1652 @@
+confour                                                                                                                 PAGE 1
+                         1
+                         2     ;;; BOARD STATE VARIABLES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                         3
+  0010                   4             ROW_DAT EQU 10H
+  0015                   5             ROW_DAT_LST EQU 15H
+  000F                   6             ROW_DAT_BEG EQU 0FH
+  0016                   7             ROW_DAT_END EQU 16H
+                         8
+  0018                   9             ROW_COL EQU 18H
+  001D                  10             ROW_COL_LST EQU 1DH
+  0017                  11             ROW_COL_BEG EQU 17H
+  001E                  12             ROW_COL_END EQU 1EH
+                        13
+  0010                  14             COL     EQU 10H ;22H.0, color to play
+                        15
+  0016                  16             LAST_ROW_DAT EQU 16H
+  001E                  17             LAST_ROW_COL EQU 1EH
+  001F                  18             LAST_MOVE EQU 1FH
+                        19
+                        20     ;;; VARIABLES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                        21
+  0008                  22             DEPTH EQU 08H
+  0009                  23             DEPTH_INIT EQU 09H
+                        24
+  000F                  25             BEST_MOVE EQU 0FH
+                        26
+  000A                  27             SERVO_DISP_H EQU 0AH
+  000B                  28             SERVO_DISP_L EQU 0BH
+  000C                  29             SERVO_RAIL_H EQU 0CH
+  000D                  30             SERVO_RAIL_L EQU 0DH
+                        31
+  002F                  32             STCK_PTR_INIT EQU 2FH
+                        33
+                        34             MBOOK_DPTR_H EQU R5
+                        35             MBOOK_DPTR_L EQU R6
+                        36             MBOOK_DEPTH EQU R7
+  0008                  37             MBOOK_FINISHED EQU 08H ;21H.0
+                        38
+                        39     ;;; PIN LAYOUT ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                        40
+  00B0                  41             SERVO_DISP_PIN EQU P3.0
+  00B1                  42             SERVO_RAIL_PIN EQU P3.1
+  00B3                  43             SERVO_CONT_PIN EQU P3.3
+                        44
+  0090                  45             IR_READER_PORT EQU P1
+  00A0                  46             LED_PIN EQU P2.0
+                        47
+                        48     ;;; INTERRUPT VECTOR TABLE ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                        49
+                        50             ORG 0000H
+0000 0165               51             AJMP MAIN
+                        52             ORG 0003H
+0003 41EF               53             AJMP PERIOD_INTERRUPT
+                        54             ORG 000BH
+000B 41F8               55             AJMP TIMER0_INTERRUPT
+                        56             ORG 001BH
+001B 6103               57             AJMP TIMER1_INTERRUPT
+                        58
+                        59     ;;; LOOK UP TABLES ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                        60
+                        61             EV_SCORE_LUT:
+001D 0304050705         62             DB  3,  4,  5,  7,  5,  4,  3
+     0403
+0024 0406080A08         63             DB  4,  6,  8, 10,  8,  6,  4
+     0604
+002B 05080B0D0B         64             DB  5,  8, 11, 13, 11,  8,  5
+     0805
+0032 05080B0D0B         65             DB  5,  8, 11, 13, 11,  8,  5
+     0805
+0039 0406080A08         66             DB  4,  6,  8, 10,  8,  6,  4
+     0604
+0040 0304050705         67             DB  3,  4,  5,  7,  5,  4,  3
+     0403
+                        68
+0047 01010C0807         69             NS_DEPTH_LUT: DB 1, 1, 12, 8, 7, 6, 5, 5
+     060505
+                        70
+004F 01000000           71             MB_INCREMENT_LUT_H: DB 01H, 00H, 00H, 00H
+0053 90390801           72             MB_INCREMENT_LUT_L: DB 90H, 39H, 08H, 01H
+  0004                  73             MB_BOOK_DEPTH EQU 4
+                        74
+                        75     ;;; assumes 12MHZ clock frequency
+0057 F8FAFAFBFB         76             SERVO_RAIL_LUT_H: DB 0F8H, 0FAH, 0FAH, 0FBH, 0FBH, 0FCH, 0FCH
+     FCFC
+005E 8010D060D0         77             SERVO_RAIL_LUT_L: DB 080H, 010H, 0D0H, 060H, 0D0H, 030H, 0B0H
+     30B0
+                        78
+  00F7                  79             SERVO_COLLECT_H EQU 0F7H
+  0040                  80             SERVO_COLLECT_L EQU 040H
+  00FD                  81             SERVO_DROP_H EQU 0FDH
+  0090                  82             SERVO_DROP_L EQU 090H
+                        83
+                        84     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                        85     MAIN:
+                        86
+0065 75812F             87             MOV SP, #STCK_PTR_INIT
+                        88
+                        89             ;setup input output devices
+0068 51BA               90             ACALL SERVO_SETUP
+006A C2B3               91             CLR SERVO_CONT_PIN
+006C 7590FF             92             MOV IR_READER_PORT, #0FFH
+006F D2A0               93             SETB LED_PIN
+                        94
+                        95             ;setup a new game
+0071 11DE               96             ACALL RESET_GAME
+                        97
+                        98             ;setup the move book
+0073 90032B             99             MOV DPTR, #MB_BOOK_LUT
+0076 AD83              100             MOV MBOOK_DPTR_H, DPH
+0078 AE82              101             MOV MBOOK_DPTR_L, DPL
+007A 7F00              102             MOV MBOOK_DEPTH, #0
+007C C208              103             CLR MBOOK_FINISHED
+                       104
+                       105     MAIN_LOOP:
+                       106
+                       107             ;get the player move
+007E 7405              108             MOV A, #5
+0080 711F              109             ACALL DELAY_ACC
+0082 C2A0              110             CLR LED_PIN
+0084 710E              111             ACALL SCAN_IR_READER
+0086 D2A0              112             SETB LED_PIN
+                       113
+                       114             ;make the player move
+0088 11EE              115             ACALL MAKE_MOVE
+                       116
+                       117             ;check if it was the last move
+008A E515              118             MOV A, ROW_DAT_LST
+008C 647F              119             XRL A, #01111111B
+008E 6046              120             JZ MAIN_HALT
+                       121
+                       122             ;check if it was a winning move
+0090 3122              123             ACALL EVALUATE_WIN
+0092 4042              124             JC MAIN_HALT
+                       125
+0094 200804            126             JB MBOOK_FINISHED, NEGAMAX_CASE
+                       127
+                       128                     ;look up the best move from the move book
+0097 5185              129                     ACALL MOVE_BOOK
+0099 8004              130                     SJMP NEGAMAX_CASE_SKIP
+                       131
+                       132             NEGAMAX_CASE:
+                       133
+                       134                     ;call the negamax algorithm, returns the best move
+009B 516B              135                     ACALL NEGAMAX_SETUP
+009D 31EF              136                     ACALL NEGAMAX
+                       137
+                       138             NEGAMAX_CASE_SKIP:
+                       139
+                       140             ;convert the best move to an column index, eg: 00001000B -> 3
+009F 78FF              141             MOV R0, #0FFH ;-1
+00A1 C3                142             CLR C
+00A2 E50F              143             MOV A, BEST_MOVE
+                       144             MOVE_INDEX_LOOP:
+00A4 08                145                     INC R0
+00A5 13                146                     RRC A
+00A6 50FC              147             JNC MOVE_INDEX_LOOP
+                       148
+                       149             ;prepare to drop a piece
+00A8 E8                150             MOV A, R0
+00A9 51DE              151             ACALL SERVO_RAIL_WRITE
+00AB 750AF7            152             MOV SERVO_DISP_H, #SERVO_COLLECT_H
+00AE 750B40            153             MOV SERVO_DISP_L, #SERVO_COLLECT_L
+00B1 7405              154             MOV A, #5
+00B3 711F              155             ACALL DELAY_ACC
+                       156
+                       157             ;drop the piece
+00B5 750AFD            158             MOV SERVO_DISP_H, #SERVO_DROP_H
+00B8 750B90            159             MOV SERVO_DISP_L, #SERVO_DROP_L
+00BB 7405              160             MOV A, #5
+00BD 711F              161             ACALL DELAY_ACC
+                       162
+                       163             ;wait until the piece is dropped
+00BF 710E              164             ACALL SCAN_IR_READER
+                       165
+                       166             ;make the computer move
+00C1 11EE              167             ACALL MAKE_MOVE
+                       168
+                       169             ;check if it was the last move
+00C3 E515              170             MOV A, ROW_DAT_LST
+00C5 647F              171             XRL A, #01111111B
+00C7 600D              172             JZ MAIN_HALT
+                       173
+                       174             ;check if it was a winning move
+00C9 3122              175             ACALL EVALUATE_WIN
+00CB 4009              176             JC MAIN_HALT
+                       177
+                       178             ;bring back the rail so that the player can make a move
+00CD E4                179             CLR A
+00CE 51DE              180             ACALL SERVO_RAIL_WRITE
+00D0 7405              181             MOV A, #5
+00D2 711F              182             ACALL DELAY_ACC
+                       183
+00D4 80A8              184             SJMP MAIN_LOOP
+                       185
+                       186     MAIN_HALT:
+                       187
+00D6 B2A0              188             CPL LED_PIN
+00D8 7401              189             MOV A, #1
+00DA 711F              190             ACALL DELAY_ACC
+                       191
+00DC 80F8              192             SJMP MAIN_HALT
+                       193
+                       194     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       195     RESET_GAME:
+                       196
+                       197             ;clears ROW_DAT, ROW_COL and COL
+                       198
+00DE 7810              199             MOV R0, #ROW_DAT
+00E0 7918              200             MOV R1, #ROW_COL
+                       201             RG_LOOP:
+                       202
+00E2 7600              203                     MOV @R0, #0
+00E4 7700              204                     MOV @R1, #0
+                       205
+00E6 08                206             INC R0
+00E7 09                207             INC R1
+00E8 B816F7            208             CJNE R0, #ROW_DAT_END, RG_LOOP
+                       209
+00EB C210              210             CLR COL
+00ED 22                211             RET
+                       212
+                       213     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       214     MAKE_MOVE:
+                       215
+                       216             ;makes the move passed by A
+                       217             ;updates the last move variables
+                       218
+00EE 780F              219             MOV R0, #ROW_DAT_BEG
+00F0 7917              220             MOV R1, #ROW_COL_BEG
+00F2 FA                221             MOV R2, A
+                       222
+                       223             ;starting from the bottom, search until an empty spot is found
+                       224             MM_SEARCH:
+                       225
+00F3 08                226                     INC R0
+00F4 09                227                     INC R1
+                       228
+00F5 E6                229                     MOV A, @R0
+00F6 5A                230                     ANL A, R2
+00F7 70FA              231                     JNZ MM_SEARCH
+                       232
+                       233             ;save the piece location for evaluating win
+00F9 8816              234             MOV LAST_ROW_DAT, R0
+00FB 891E              235             MOV LAST_ROW_COL, R1
+00FD 8A1F              236             MOV LAST_MOVE, R2
+                       237
+00FF E6                238             MOV A, @R0
+0100 4A                239             ORL A, R2
+0101 F6                240             MOV @R0, A
+                       241
+0102 301003            242             JNB COL, MM_RETURN
+0105 E7                243             MOV A, @R1
+0106 4A                244             ORL A, R2
+0107 F7                245             MOV @R1, A
+                       246
+                       247             MM_RETURN:
+0108 B210              248             CPL COL
+010A 22                249             RET
+                       250
+                       251     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       252     UNDO_MOVE:
+                       253
+                       254             ;undos the move passed by A
+                       255
+010B 7816              256             MOV R0, #ROW_DAT_END
+010D 791E              257             MOV R1, #ROW_COL_END
+010F FA                258             MOV R2, A
+                       259
+                       260             ;starting from the top, search until a non-empty spot is found
+                       261             UM_SEARCH:
+                       262
+0110 18                263                     DEC R0
+0111 19                264                     DEC R1
+                       265
+0112 E6                266                     MOV A, @R0
+0113 5A                267                     ANL A, R2
+0114 60FA              268                     JZ UM_SEARCH
+                       269
+0116 E6                270             MOV A, @R0
+0117 6A                271             XRL A, R2
+0118 F6                272             MOV @R0, A
+                       273
+0119 201003            274             JB COL, UM_RETURN
+011C E7                275             MOV A, @R1
+011D 6A                276             XRL A, R2
+011E F7                277             MOV @R1, A
+                       278
+                       279             UM_RETURN:
+011F B210              280             CPL COL
+0121 22                281             RET
+                       282
+                       283     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       284     EVALUATE_WIN:
+                       285
+                       286             ;checks whether !COL has won or not with the last move
+                       287             ;returns the result via C
+                       288
+0122 A816              289             MOV R0, LAST_ROW_DAT
+0124 A91E              290             MOV R1, LAST_ROW_COL
+0126 AA1F              291             MOV R2, LAST_MOVE
+                       292
+0128 7B01              293             MOV R3, #1
+012A 752001            294             MOV 20H, #00000001B
+012D 318A              295             ACALL EVALUATE_WIN_LOOPER
+012F AA1F              296             MOV R2, LAST_MOVE
+0131 752003            297             MOV 20H, #00000011B
+0134 318A              298             ACALL EVALUATE_WIN_LOOPER
+0136 AA1F              299             MOV R2, LAST_MOVE
+                       300
+0138 BB0400            301             CJNE R3, #4, $+3
+013B 504B              302             JNC EW_RETURN
+                       303
+013D 7B01              304             MOV R3, #1
+013F 752004            305             MOV 20H, #00000100B
+0142 318A              306             ACALL EVALUATE_WIN_LOOPER
+0144 A816              307             MOV R0, LAST_ROW_DAT
+0146 A91E              308             MOV R1, LAST_ROW_COL
+0148 75200C            309             MOV 20H, #00001100B
+014B 318A              310             ACALL EVALUATE_WIN_LOOPER
+014D A816              311             MOV R0, LAST_ROW_DAT
+014F A91E              312             MOV R1, LAST_ROW_COL
+                       313
+0151 BB0400            314             CJNE R3, #4, $+3
+0154 5032              315             JNC EW_RETURN
+                       316
+0156 7B01              317             MOV R3, #1
+0158 752005            318             MOV 20H, #00000101B
+015B 318A              319             ACALL EVALUATE_WIN_LOOPER
+015D A816              320             MOV R0, LAST_ROW_DAT
+015F A91E              321             MOV R1, LAST_ROW_COL
+0161 AA1F              322             MOV R2, LAST_MOVE
+0163 75200F            323             MOV 20H, #00001111B
+0166 318A              324             ACALL EVALUATE_WIN_LOOPER
+0168 A816              325             MOV R0, LAST_ROW_DAT
+016A A91E              326             MOV R1, LAST_ROW_COL
+016C AA1F              327             MOV R2, LAST_MOVE
+                       328
+016E BB0400            329             CJNE R3, #4, $+3
+0171 5015              330             JNC EW_RETURN
+                       331
+0173 7B01              332             MOV R3, #1
+0175 752007            333             MOV 20H, #00000111B
+0178 318A              334             ACALL EVALUATE_WIN_LOOPER
+017A A816              335             MOV R0, LAST_ROW_DAT
+017C A91E              336             MOV R1, LAST_ROW_COL
+017E AA1F              337             MOV R2, LAST_MOVE
+0180 75200D            338             MOV 20H, #00001101B
+0183 318A              339             ACALL EVALUATE_WIN_LOOPER
+                       340
+0185 BB0400            341             CJNE R3, #4, $+3
+                       342
+                       343             EW_RETURN:
+0188 B3                344             CPL C
+0189 22                345             RET
+                       346
+                       347     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       348     EVALUATE_WIN_LOOPER:
+                       349
+                       350             ;counts the number of consecutive pieces with color !COL
+                       351             ;starts from the piece pointed by R0, R1, R2
+                       352
+                       353             ;direction is specified by 20H
+                       354             ; 00H (20H.0) - horizontal
+                       355             ; 01H (20H.1) - horizontal direction
+                       356             ; 02H (20H.2) - vertical
+                       357             ; 03H (20H.3) - vertical direction
+                       358
+018A 300011            359             JNB 00H, EWL_HORIZONTAL_SKIP
+018D 300107            360                     JNB 01H, EWL_HORIZONTAL_DIR_SKIP
+                       361
+0190 EA                362                             MOV A, R2
+0191 23                363                             RL A
+0192 FA                364                             MOV R2, A
+0193 BA8008            365                             CJNE R2, #10000000B, EWL_HORIZONTAL_SKIP
+0196 22                366                             RET
+                       367
+                       368                     EWL_HORIZONTAL_DIR_SKIP:
+                       369
+0197 EA                370                             MOV A, R2
+0198 03                371                             RR A
+0199 FA                372                             MOV R2, A
+019A BA8001            373                             CJNE R2, #10000000B, EWL_HORIZONTAL_SKIP
+019D 22                374                             RET
+                       375
+                       376             EWL_HORIZONTAL_SKIP:
+                       377
+019E 30020F            378             JNB 02H, EWL_VERTICAL_SKIP
+01A1 300306            379                     JNB 03H, EWL_VERICAL_DIR_SKIP
+                       380
+01A4 08                381                             INC R0
+01A5 09                382                             INC R1
+01A6 B81607            383                             CJNE R0, #ROW_DAT_END, EWL_VERTICAL_SKIP
+01A9 22                384                             RET
+                       385
+                       386                     EWL_VERICAL_DIR_SKIP:
+                       387
+01AA 18                388                             DEC R0
+01AB 19                389                             DEC R1
+01AC B80F01            390                             CJNE R0, #ROW_DAT_BEG, EWL_VERTICAL_SKIP
+01AF 22                391                             RET
+                       392
+                       393             EWL_VERTICAL_SKIP:
+                       394
+01B0 E6                395             MOV A, @R0
+01B1 5A                396             ANL A, R2
+01B2 600C              397             JZ EWL_RETURN ;there is no piece
+                       398
+01B4 E7                399             MOV A, @R1
+01B5 5A                400             ANL A, R2
+01B6 A210              401             MOV C, COL
+01B8 6001              402             JZ EWL_COL_SKIP
+01BA B3                403                     CPL C
+                       404             EWL_COL_SKIP:
+01BB 5003              405             JNC EWL_RETURN ;there is a piece with the opposite color
+                       406
+01BD 0B                407             INC R3
+01BE 218A              408             AJMP EVALUATE_WIN_LOOPER
+                       409
+                       410             EWL_RETURN:
+01C0 22                411             RET
+                       412
+                       413     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       414     EVALUATE:
+                       415
+                       416             ;calculates the heuristic value of the board relative to !COL
+                       417             ;returns the result via A
+                       418
+01C1 90001D            419             MOV DPTR, #EV_SCORE_LUT
+                       420
+01C4 7B00              421             MOV R3, #0
+01C6 7C00              422             MOV R4, #0
+                       423
+01C8 7810              424             MOV R0, #ROW_DAT
+01CA 7918              425             MOV R1, #ROW_COL
+                       426             EV_ROW_LOOP:
+                       427
+01CC 7A01              428                     MOV R2, #00000001B
+                       429                     EV_COL_LOOP:
+                       430
+                       431                             ;if there is no piece, then continue
+01CE E6                432                             MOV A, @R0
+01CF 5A                433                             ANL A, R2
+01D0 600F              434                             JZ EV_CONTINUE
+                       435
+                       436                             ;compare COL and the piece color
+01D2 E7                437                             MOV A, @R1
+01D3 5A                438                             ANL A, R2
+01D4 A210              439                             MOV C, COL
+01D6 6001              440                             JZ EV_COL_SKIP
+01D8 B3                441                                     CPL C
+                       442                             EV_COL_SKIP:
+                       443
+                       444                             ;get the piece score
+01D9 EB                445                             MOV A, R3
+01DA 93                446                             MOVC A, @A+DPTR
+                       447
+                       448                             ;negate the score according to comparison result
+01DB 5002              449                             JNC EV_COL_SKIP2
+01DD F4                450                                     CPL A
+01DE 04                451                                     INC A
+                       452                             EV_COL_SKIP2:
+                       453
+                       454                             ;add the piece score to the total score
+01DF 2C                455                             ADD A, R4
+01E0 FC                456                             MOV R4, A
+                       457
+                       458                     EV_CONTINUE:
+01E1 0B                459                     INC R3
+                       460
+01E2 EA                461                     MOV A, R2
+01E3 23                462                     RL A
+01E4 FA                463                     MOV R2, A
+01E5 BA80E6            464                     CJNE R2, #10000000B, EV_COL_LOOP
+                       465
+01E8 08                466             INC R0
+01E9 09                467             INC R1
+01EA B816DF            468             CJNE R0, #ROW_DAT_END, EV_ROW_LOOP
+                       469
+01ED EC                470             MOV A, R4
+01EE 22                471             RET
+                       472
+                       473     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       474     NEGAMAX:
+                       475
+                       476             ;requires NEGAMAX_SETUP to be called previously
+                       477             ;ALPHA is passed by R6
+                       478             ;BETA is passed by R7
+                       479
+                       480     ;;; RETURN CONDITIONS
+                       481
+01EF 3122              482             ACALL EVALUATE_WIN
+01F1 5007              483             JNC NG_WIN_SKIP
+                       484
+                       485                     ;!COL has won, return -INF (-DEPTH)
+01F3 7481              486                     MOV A, #81H
+01F5 2509              487                     ADD A, DEPTH_INIT
+01F7 9508              488                     SUBB A, DEPTH ;previous addition cannot overflow
+01F9 22                489                     RET
+                       490
+                       491             NG_WIN_SKIP:
+                       492
+01FA E515              493             MOV A, ROW_DAT_LST
+01FC 647F              494             XRL A, #01111111B
+01FE 7002              495             JNZ NG_MOVE_SKIP
+                       496
+                       497                     ;no possible move left, return 0
+0200 E4                498                     CLR A
+0201 22                499                     RET
+                       500
+                       501             NG_MOVE_SKIP:
+                       502
+0202 E508              503             MOV A, DEPTH
+0204 7003              504             JNZ NG_DEPTH_SKIP
+                       505
+                       506                     ;target depth reached, return the evaluation score
+0206 31C1              507                     ACALL EVALUATE
+0208 22                508                     RET
+                       509
+                       510             NG_DEPTH_SKIP:
+                       511
+                       512     ;;; RECURSIVE PART
+                       513
+                       514             ;initial best score is assumed to be even less than -INF
+                       515             ;so that BEST_MOVE will not be left null
+0209 7C80              516             MOV R4, #80H
+                       517
+020B 7D01              518             MOV R5, #00000001B
+                       519             NG_MOVE_LOOP:
+                       520
+                       521                     ;check whether the move is possible or not
+020D ED                522                     MOV A, R5
+020E 5515              523                     ANL A, ROW_DAT_LST
+0210 7051              524                     JNZ NG_MOVE_LOOP_CONT
+                       525
+0212 ED                526                     MOV A, R5
+0213 11EE              527                     ACALL MAKE_MOVE
+0215 1508              528                     DEC DEPTH
+                       529
+0217 C004              530                             PUSH 04H
+0219 C005              531                             PUSH 05H
+021B C006              532                             PUSH 06H
+021D C007              533                             PUSH 07H
+                       534
+                       535                     ;;; ALPHA <= -BETA
+                       536                     ;;; BETA <= -ALPHA
+                       537
+021F EE                538                             MOV A, R6
+0220 F4                539                             CPL A
+0221 04                540                             INC A
+0222 CF                541                             XCH A, R7
+0223 F4                542                             CPL A
+0224 04                543                             INC A
+0225 FE                544                             MOV R6, A
+                       545
+0226 31EF              546                             ACALL NEGAMAX ;RESULT
+0228 FB                547                             MOV R3, A
+                       548
+0229 D007              549                             POP 07H
+022B D006              550                             POP 06H
+022D D005              551                             POP 05H
+022F D004              552                             POP 04H
+                       553
+0231 ED                554                     MOV A, R5
+0232 310B              555                     ACALL UNDO_MOVE
+0234 0508              556                     INC DEPTH
+                       557
+                       558             ;;; SCORE <= MAX(SCORE, -RESULT)
+                       559             ;;; scores are normalized before comparison by adding #80H
+                       560
+0236 EB                561                     MOV A, R3
+0237 F4                562                     CPL A
+0238 04                563                     INC A
+0239 FB                564                     MOV R3, A ;negated score
+023A 2480              565                     ADD A, #80H
+023C FA                566                     MOV R2, A ;negated and normalized score
+                       567
+023D EC                568                     MOV A, R4
+023E 2480              569                     ADD A, #80H
+                       570
+0240 C3                571                     CLR C
+0241 9A                572                     SUBB A, R2
+0242 5009              573                     JNC NG_SCORE_COMP_SKIP
+                       574
+0244 AC03              575                             MOV R4, 03H
+                       576
+                       577                             ;if this is an initial level call, then also update BEST_MOVE
+0246 E508              578                             MOV A, DEPTH
+0248 B50902            579                             CJNE A, DEPTH_INIT, NG_SCORE_COMP_SKIP
+                       580
+024B 8D0F              581                                     MOV BEST_MOVE, R5
+                       582
+                       583                     NG_SCORE_COMP_SKIP:
+                       584
+                       585             ;;; ALPHA <= MAX(ALPHA, -RESULT)
+                       586
+024D EE                587                     MOV A, R6
+024E 2480              588                     ADD A, #80H
+                       589
+0250 C3                590                     CLR C
+0251 9A                591                     SUBB A, R2
+0252 5002              592                     JNC NG_ALPHA_COMP_SKIP
+0254 AE03              593                             MOV R6, 03H
+                       594                     NG_ALPHA_COMP_SKIP:
+                       595
+                       596             ;;; RETURN IF ALPHA > BETA
+                       597
+0256 EF                598                     MOV A, R7
+0257 2480              599                     ADD A, #80H
+0259 FA                600                     MOV R2, A
+                       601
+025A EE                602                     MOV A, R6
+025B 2480              603                     ADD A, #80H
+                       604
+025D C3                605                     CLR C
+025E 9A                606                     SUBB A, R2
+025F 4002              607                     JC NG_MOVE_LOOP_CONT
+                       608
+0261 EC                609                             MOV A, R4
+0262 22                610                             RET
+                       611
+                       612             NG_MOVE_LOOP_CONT:
+0263 ED                613             MOV A, R5
+0264 23                614             RL A
+0265 FD                615             MOV R5, A
+0266 BD80A4            616             CJNE R5, #10000000B, NG_MOVE_LOOP
+                       617
+0269 EC                618             MOV A, R4
+026A 22                619             RET
+                       620
+                       621     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       622     NEGAMAX_SETUP:
+                       623
+                       624             ;sets DEPTH and DEPTH_INIT according to the empty column count
+                       625             ;sets the initial values for ALPHA and BETA
+                       626
+                       627             ;counts the empty columns
+026B E515              628             MOV A, ROW_DAT_LST
+026D 7800              629             MOV R0, #0
+026F 7907              630             MOV R1, #7
+                       631             NS_LOOP:
+                       632
+0271 13                633                     RRC A
+0272 4001              634                     JC NS_LOOP_CONT
+0274 08                635                             INC R0
+                       636
+                       637             NS_LOOP_CONT:
+0275 D9FA              638             DJNZ R1, NS_LOOP
+                       639
+0277 900047            640             MOV DPTR, #NS_DEPTH_LUT
+027A E8                641             MOV A, R0
+027B 93                642             MOVC A, @A+DPTR
+                       643
+027C F508              644             MOV DEPTH, A
+027E F509              645             MOV DEPTH_INIT, A
+                       646
+0280 7E81              647             MOV R6, #81H ;ALPHA <= -INF
+0282 7F7F              648             MOV R7, #7FH ;BATE <= +INF
+                       649
+0284 22                650             RET
+                       651
+                       652     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       653     MOVE_BOOK:
+                       654
+                       655             ;requires MBOOK variables to be setup
+                       656
+0285 90004F            657             MOV DPTR, #MB_INCREMENT_LUT_H
+0288 EF                658             MOV A, MBOOK_DEPTH
+0289 93                659             MOVC A, @A+DPTR
+028A F8                660             MOV R0, A
+                       661
+028B 900053            662             MOV DPTR, #MB_INCREMENT_LUT_L
+028E EF                663             MOV A, MBOOK_DEPTH
+028F 93                664             MOVC A, @A+DPTR
+0290 F9                665             MOV R1, A
+                       666
+0291 0F                667             INC MBOOK_DEPTH
+                       668
+0292 EF                669             MOV A, MBOOK_DEPTH
+0293 B40400            670             CJNE A, #MB_BOOK_DEPTH, $+3
+0296 9208              671             MOV MBOOK_FINISHED, C
+0298 B208              672             CPL MBOOK_FINISHED
+                       673
+029A AA1F              674             MOV R2, LAST_MOVE
+                       675             MB_DPTR_INC_LOOP:
+                       676
+029C EA                677                     MOV A, R2
+029D 03                678                     RR A
+029E FA                679                     MOV R2, A
+029F BA8002            680                     CJNE R2, #10000000B, MB_DPTR_INC_CONTINUE
+02A2 8008              681                     SJMP MB_DPTR_INC_BREAK
+                       682
+                       683             MB_DPTR_INC_CONTINUE:
+                       684
+02A4 EE                685                     MOV A, MBOOK_DPTR_L
+02A5 29                686                     ADD A, R1
+02A6 FE                687                     MOV MBOOK_DPTR_L, A
+02A7 ED                688                     MOV A, MBOOK_DPTR_H
+02A8 38                689                     ADDC A, R0
+02A9 FD                690                     MOV MBOOK_DPTR_H, A
+                       691
+02AA 80F0              692             SJMP MB_DPTR_INC_LOOP
+                       693             MB_DPTR_INC_BREAK:
+                       694
+02AC 8D83              695             MOV DPH, MBOOK_DPTR_H
+02AE 8E82              696             MOV DPL, MBOOK_DPTR_L
+02B0 E4                697             CLR A
+02B1 93                698             MOVC A, @A+DPTR
+02B2 F50F              699             MOV BEST_MOVE, A
+                       700
+02B4 0E                701             INC MBOOK_DPTR_L
+02B5 EE                702             MOV A, MBOOK_DPTR_L
+02B6 7001              703             JNZ MB_CARRY_SKIP
+02B8 0D                704                     INC MBOOK_DPTR_H
+                       705             MB_CARRY_SKIP:
+                       706
+02B9 22                707             RET
+                       708
+                       709     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       710     SERVO_SETUP:
+                       711
+02BA D2B3              712             SETB SERVO_CONT_PIN
+                       713
+02BC 750AFD            714             MOV SERVO_DISP_H, #SERVO_DROP_H
+02BF 750B90            715             MOV SERVO_DISP_L, #SERVO_DROP_L
+02C2 C2B0              716             CLR SERVO_DISP_PIN
+                       717
+02C4 E4                718             CLR A
+02C5 51DE              719             ACALL SERVO_RAIL_WRITE
+02C7 C2B1              720             CLR SERVO_RAIL_PIN
+                       721
+02C9 758911            722             MOV TMOD, #11H
+02CC 850A8C            723             MOV TH0, SERVO_DISP_H
+02CF 850B8A            724             MOV TL0, SERVO_DISP_L
+02D2 850C8D            725             MOV TH1, SERVO_RAIL_H
+02D5 850D8B            726             MOV TL1, SERVO_RAIL_L
+                       727
+02D8 D288              728             SETB TCON.0
+02DA 75A88B            729             MOV IE, #10001011B
+02DD 22                730             RET
+                       731
+                       732     SERVO_RAIL_WRITE:
+                       733
+02DE C0E0              734             PUSH ACC
+                       735
+02E0 900057            736             MOV DPTR, #SERVO_RAIL_LUT_H
+02E3 93                737             MOVC A, @A+DPTR
+02E4 F50C              738             MOV SERVO_RAIL_H, A
+                       739
+02E6 D0E0              740             POP ACC
+                       741
+02E8 90005E            742             MOV DPTR, #SERVO_RAIL_LUT_L
+02EB 93                743             MOVC A, @A+DPTR
+02EC F50D              744             MOV SERVO_RAIL_L, A
+                       745
+02EE 22                746             RET
+                       747
+                       748     PERIOD_INTERRUPT:
+02EF D2B0              749             SETB SERVO_DISP_PIN
+02F1 D2B1              750             SETB SERVO_RAIL_PIN
+02F3 D28C              751             SETB TR0
+02F5 D28E              752             SETB TR1
+02F7 32                753             RETI
+                       754
+                       755     TIMER0_INTERRUPT:
+02F8 C2B0              756             CLR SERVO_DISP_PIN
+02FA C28C              757             CLR TR0
+02FC 850A8C            758             MOV TH0, SERVO_DISP_H
+02FF 850B8A            759             MOV TL0, SERVO_DISP_L
+0302 32                760             RETI
+                       761
+                       762     TIMER1_INTERRUPT:
+0303 C2B1              763             CLR SERVO_RAIL_PIN
+0305 C28E              764             CLR TR1
+0307 850C8D            765             MOV TH1, SERVO_RAIL_H
+030A 850D8B            766             MOV TL1, SERVO_RAIL_L
+030D 32                767             RETI
+                       768
+                       769     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       770     SCAN_IR_READER:
+                       771
+030E A890              772             MOV R0, IR_READER_PORT
+0310 B80002            773             CJNE R0, #00H, WIR_DEBOUNCE
+0313 80F9              774             SJMP SCAN_IR_READER
+                       775
+                       776             WIR_DEBOUNCE:
+0315 7964              777             MOV R1, #100
+0317 D9FE              778             WIR_DELAY: DJNZ R1, WIR_DELAY
+                       779
+0319 E590              780             MOV A, IR_READER_PORT
+031B B500F0            781             CJNE A, 00H, SCAN_IR_READER
+031E 22                782             RET
+                       783
+                       784     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       785     DELAY_ACC:
+                       786
+031F F8                787             MOV R0, A
+0320 79FA              788             DA_LOOP_0: MOV R1, #250
+0322 7AFA              789             DA_LOOP_1: MOV R2, #250
+0324 DAFE              790             DA_LOOP_2: DJNZ R2, DA_LOOP_2
+0326 D9FA              791             DJNZ R1, DA_LOOP_1
+0328 D8F6              792             DJNZ R0, DA_LOOP_0
+032A 22                793             RET
+                       794
+                       795     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       796     MB_BOOK_LUT:
+                       797
+032B 0808011008        798     DB 08,08,01,16,08,08,16,08,08,16,08,08,08,08,16,08,08,08,08,08,08,08,08,08,08
+     0810080810
+     0808080810
+     0808080808
+     0808080808
+0344 0810012010        799     DB 08,16,01,32,16,04,04,16,04,08,08,08,08,16,08,08,08,16,01,08,16,16,08,04,08
+     0404100408
+     0808081008
+     0808100108
+     1010080408
+035D 0808080804        800     DB 08,08,08,08,04,08,08,08,08,08,08,08,08,16,08,08,08,08,08,08,08,16,08,08,08
+     0808080808
+     0808081008
+     0808080808
+     0810080808
+0376 0808080808        801     DB 08,08,08,08,08,08,08,08,02,08,16,04,02,16,08,02,08,08,08,08,16,08,08,08,08
+     0808080208
+     1004021008
+     0208080808
+     1008080808
+038F 0808080808        802     DB 08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,08,08,08,08,08,08,08,08,08,08
+     0808080808
+     0804080808
+     0808080808
+     0808080808
+03A8 0808080808        803     DB 08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,04,04,08,01,01,16,08,04,08,08
+     0808080808
+     0804080808
+     0404080101
+     1008040808
+03C1 0808040808        804     DB 08,08,04,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,08,08,01
+     0808080808
+     0808080808
+     0808080408
+     0808080801
+03DA 0808100808        805     DB 08,08,16,08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,04,04,04,08,32,16,16
+     0808080808
+     0808080804
+     0808080404
+     0408201010
+03F3 0810101004        806     DB 08,16,16,16,04,08,08,08,08,16,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08
+     0808080810
+     0808080808
+     0808080808
+     0808080808
+040C 0408080808        807     DB 04,08,08,08,08,08,08,08,08,16,08,08,08,08,08,08,08,16,08,08,08,08,08,08,08
+     0808080810
+     0808080808
+     0808100808
+     0808080808
+0425 0408080810        808     DB 04,08,08,08,16,08,08,04,08,08,16,16,08,08,08,08,16,08,08,08,08,08,08,08,16
+     0808040808
+     1010080808
+     0810080808
+     0808080810
+043E 0808080808        809     DB 08,08,08,08,08,08,08,16,08,08,08,08,16,01,08,16,16,08,04,08,08,08,08,08,08
+     0808100808
+     0808100108
+     1010080408
+     0808080808
+0457 0808080808        810     DB 08,08,08,08,08,08,08,08,08,08,08,08,08,02,04,32,16,32,08,08,08,08,08,16,08
+     0808080808
+     0808080204
+     2010200808
+     0808081008
+0470 0808080808        811     DB 08,08,08,08,08,08,04,08,08,08,08,08,08,08,04,08,08,08,04,16,02,32,02,02,02
+     0804080808
+     0808080804
+     0808080410
+     0220020202
+0489 0202080808        812     DB 02,02,08,08,08,08,04,08,08,08,16,02,32,02,02,02,02,02,16,02,32,02,02,02,02
+     0804080808
+     1002200202
+     0202021002
+     2002020202
+04A2 0204080808        813     DB 02,04,08,08,08,04,16,08,08,08,08,08,08,04,08,08,08,16,02,32,02,02,02,02,02
+     0410080808
+     0808080408
+     0808100220
+     0202020202
+04BB 0404040404        814     DB 04,04,04,04,04,16,04,04,04,04,04,04,04,02,04,04,04,04,04,08,02,02,08,16,16
+     1004040404
+     0404040204
+     0404040408
+     0202081010
+04D4 0804040408        815     DB 08,04,04,04,08,04,04,04,04,04,04,04,16,04,04,04,04,04,04,04,02,04,04,04,04
+     0404040404
+     0404100404
+     0404040404
+     0204040404
+04ED 0404041004        816     DB 04,04,04,16,04,04,04,04,02,04,04,08,04,08,04,04,04,04,08,08,04,08,04,04,08
+     0404040204
+     0408040804
+     0404040808
+     0408040408
+0506 0402080408        817     DB 04,02,08,04,08,04,08,08,08,02,08,08,08,08,08,08,04,04,04,04,08,16,04,04,04
+     0408080802
+     0808080808
+     0804040404
+     0810040404
+051F 0404040404        818     DB 04,04,04,04,04,04,04,08,08,08,08,04,04,08,08,04,04,08,08,08,08,04,04,08,04
+     0404080808
+     0804040808
+     0404080808
+     0804040804
+0538 0802080804        819     DB 08,02,08,08,04,04,08,02,02,08,02,08,16,08,08,08,08,08,08,08,08,08,08,04,04
+     0408020208
+     0208100808
+     0808080808
+     0808080404
+0551 0410080808        820     DB 04,16,08,08,08,04,08,08,08,08,04,16,04,04,04,08,08,08,32,04,08,08,08,08,08
+     0408080808
+     0410040404
+     0808082004
+     0808080808
+056A 0808020808        821     DB 08,08,02,08,08,08,08,08,02,08,01,08,08,08,08,08,08,08,04,08,08,08,04,08,04
+     0808080208
+     0108080808
+     0808080408
+     0808040804
+0583 0204020202        822     DB 02,04,02,02,02,08,08,08,08,04,08,64,32,08,08,08,08,16,64,08,16,08,08,08,08
+     0808080804
+     0840200808
+     0808104008
+     1008080808
+059C 2020100804        823     DB 32,32,16,08,04,04,04,04,16,04,04,04,04,04,04,04,16,04,04,04,04,04,16,02,02
+     0404041004
+     0404040404
+     0410040404
+     0404100202
+05B5 0810402008        824     DB 08,16,64,32,08,02,08,02,02,16,64,32,16,04,02,04,08,04,64,04,04,04,04,16,04
+     0208020210
+     4020100402
+     0408044004
+     0404041004
+05CE 0404040404        825     DB 04,04,04,04,04,04,16,04,04,04,04,04,04,04,04,02,04,04,04,04,04,04,04,02,04
+     0410040404
+     0404040404
+     0204040404
+     0404040204
+05E7 0404040410        826     DB 04,04,04,04,16,02,02,08,64,02,16,08,04,08,08,02,64,04,16,04,04,04,16,04,04
+     0202084002
+     1008040808
+     0240041004
+     0404100404
+0600 0404020404        827     DB 04,04,02,04,04,04,04,08,32,16,08,08,04,08,08,08,04,04,04,04,04,04,16,04,04
+     0404082010
+     0808040808
+     0804040404
+     0404100404
+0619 0404040404        828     DB 04,04,04,04,04,02,04,04,04,04,04,08,02,02,08,32,16,08,08,04,04,02,02,32,16
+     0204040404
+     0408020208
+     2010080804
+     0402022010
+0632 0404040410        829     DB 04,04,04,04,16,04,04,04,04,08,08,04,08,08,08,04,04,04,04,04,16,04,04,04,04
+     0404040408
+     0804080808
+     0404040404
+     1004040404
+064B 0808080808        830     DB 08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,04,08,08
+     0808080808
+     0808080808
+     0808080808
+     0808040808
+0664 0804040801        831     DB 08,04,04,08,01,01,16,08,04,08,08,08,08,04,08,08,08,08,08,08,08,08,08,08,08
+     0110080408
+     0808080408
+     0808080808
+     0808080808
+067D 0808080804        832     DB 08,08,08,08,04,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,02,08,08,08
+     0808080808
+     0808080808
+     0808080808
+     0802080808
+0696 0808080804        833     DB 08,08,08,08,04,08,08,08,08,04,02,04,04,04,04,04,08,08,08,08,08,08,08,08,08
+     0808080804
+     0204040404
+     0408080808
+     0808080808
+06AF 0808080408        834     DB 08,08,08,04,08,08,08,08,08,08,08,04,08,08,08,04,08,08,08,08,04,08,08,08,08
+     0808080808
+     0804080808
+     0408080808
+     0408080808
+06C8 0808080808        835     DB 08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,08,08,08,08,08
+     0808080808
+     0808080808
+     0804080808
+     0808080808
+06E1 0808080808        836     DB 08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,04,08
+     0808080808
+     0808080808
+     0808080808
+     0808080408
+06FA 0808040404        837     DB 08,08,04,04,04,08,08,08,08,08,04,08,08,08,08,08,08,04,01,08,04,08,08,08,02
+     0808080808
+     0408080808
+     0808040108
+     0408080802
+0713 0820080408        838     DB 08,32,08,04,08,08,08,08,08,04,08,08,08,08,08,08,04,08,08,08,08,08,08,08,08
+     0808080804
+     0808080808
+     0804080808
+     0808080808
+072C 0408080808        839     DB 04,08,08,08,08,08,08,08,08,04,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08
+     0808080804
+     0808080808
+     0808080808
+     0808080808
+0745 0408080808        840     DB 04,08,08,08,08,08,04,04,04,16,16,08,08,08,08,08,16,08,08,08,08,08,08,08,08
+     0804040410
+     1008080808
+     0810080808
+     0808080808
+075E 0808080808        841     DB 08,08,08,08,08,08,08,04,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,04
+     0808040808
+     0808080808
+     0808080808
+     0808080804
+0777 0808080808        842     DB 08,08,08,08,08,08,08,04,08,08,08,08,04,04,04,08,16,32,04,08,08,08,08,08,08
+     0808040808
+     0808040404
+     0810200408
+     0808080808
+0790 0808080808        843     DB 08,08,08,08,08,08,32,08,08,08,08,08,08,08,04,08,08,08,08,08,08,08,08,04,08
+     0820080808
+     0808080804
+     0808080808
+     0808080408
+07A9 0808080808        844     DB 08,08,08,08,08,08,04,08,08,08,08,08,08,08,04,08,08,08,04,04,04,08,08,16,08
+     0804080808
+     0808080804
+     0808080404
+     0408081008
+07C2 0808080808        845     DB 08,08,08,08,08,04,08,08,08,08,08,08,08,04,08,08,08,08,08,08,08,04,08,08,08
+     0408080808
+     0808080408
+     0808080808
+     0804080808
+07DB 0808080808        846     DB 08,08,08,08,08,08,16,08,08,08,04,08,08,08,02,08,08,08,02,08,08,08,08,32,16
+     0810080808
+     0408080802
+     0808080208
+     0808082010
+07F4 0804080204        847     DB 08,04,08,02,04,04,04,04,04,08,08,08,08,32,08,08,08,08,08,08,08,16,08,08,08
+     0404040408
+     0808082008
+     0808080808
+     0810080808
+080D 0808080802        848     DB 08,08,08,08,02,08,08,08,04,08,08,08,08,02,08,08,08,08,08,02,08,01,08,08,08
+     0808080408
+     0808080208
+     0808080802
+     0801080808
+0826 0808080804        849     DB 08,08,08,08,04,08,08,08,04,08,04,02,04,02,02,02,08,08,08,08,04,08,64,32,08
+     0808080408
+     0402040202
+     0208080808
+     0408402008
+083F 0808081040        850     DB 08,08,08,16,64,08,16,08,08,08,08,32,32,16,08,16,02,08,08,04,16,08,08,16,01
+     0810080808
+     0820201008
+     1002080804
+     1008081001
+0858 0808041008        851     DB 08,08,04,16,08,02,02,04,02,01,08,16,08,08,08,16,02,01,04,04,04,32,04,08,02
+     0202040201
+     0810080808
+     1002010404
+     0420040802
+0871 0108080808        852     DB 01,08,08,08,08,08,08,02,01,08,16,08,08,08,16,02,01,16,04,04,32,16,08,08,32
+     0808020108
+     1008080810
+     0201100404
+     2010080820
+088A 0402042004        853     DB 04,02,04,32,04,08,04,04,02,04,04,04,04,04,16,02,01,04,16,16,16,16,08,02,04
+     0804040204
+     0404040410
+     0201041010
+     1010080204
+08A3 0208201020        854     DB 02,08,32,16,32,04,04,04,04,04,16,64,32,16,16,16,16,16,16,32,16,08,08,04,02
+     0404040404
+     1040201010
+     1010101020
+     1008080402
+08BC 1020100204        855     DB 16,32,16,02,04,04,04,02,16,04,04,64,32,08,08,08,08,04,08,64,32,08,08,08,08
+     0404021004
+     0440200808
+     0808040840
+     2008080808
+08D5 0808402004        856     DB 08,08,64,32,04,04,02,16,04,16,64,32,16,08,08,08,04,08,64,32,64,32,32,08,04
+     0402100410
+     4020100808
+     0804084020
+     4020200804
+08EE 1008082004        857     DB 16,08,08,32,04,08,08,04,16,08,08,16,08,08,04,02,02,08,08,08,08,04,08,01,04
+     0808041008
+     0810080804
+     0202080808
+     0804080104
+0907 0808080802        858     DB 08,08,08,08,02,01,08,16,08,08,08,16,32,32,32,16,32,16,08,08,08,08,08,16,08
+     0108100808
+     0810202020
+     1020100808
+     0808081008
+0920 0808080808        859     DB 08,08,08,08,08,08,64,08,32,08,08,08,08,08,32,08,08,08,08,08,08,08,08,02,08
+     0840082008
+     0808080820
+     0808080808
+     0808080208
+0939 0808080808        860     DB 08,08,08,08,08,08,04,08,08,08,08,08,08,08,02,08,08,08,16,04,04,16,04,16,32
+     0804080808
+     0808080802
+     0808081004
+     0410041020
+0952 0820080402        861     DB 08,32,08,04,02,08,08,08,08,16,08,08,08,32,08,08,08,08,08,08,08,04,08,08,08
+     0808080810
+     0808082008
+     0808080808
+     0804080808
+096B 0808080808        862     DB 08,08,08,08,08,08,16,08,08,08,08,08,08,08,16,08,08,08,08,08,08,08,04,08,08
+     0810080808
+     0808080810
+     0808080808
+     0808040808
+0984 0810080804        863     DB 08,16,08,08,04,08,08,16,16,08,08,08,08,16,08,08,08,08,08,08,08,16,08,08,08
+     0808101008
+     0808081008
+     0808080808
+     0810080808
+099D 0808080810        864     DB 08,08,08,08,16,08,08,08,08,08,08,08,08,16,08,08,08,08,08,08,08,02,08,08,08
+     0808080808
+     0808081008
+     0808080808
+     0802080808
+09B6 0808080808        865     DB 08,08,08,08,08,08,08,08,08,16,02,04,08,16,16,16,08,08,08,08,16,08,08,08,08
+     0808080810
+     0204081010
+     1008080808
+     1008080808
+09CF 0808081008        866     DB 08,08,08,16,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,08
+     0808080808
+     0808080808
+     0808080808
+     0408080808
+09E8 0808080808        867     DB 08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,08,08,04,04,04,16,16,08,08,08
+     0808080808
+     0804080808
+     0808040404
+     1010080808
+0A01 0808100808        868     DB 08,08,16,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,08,08,08
+     0808080808
+     0808080808
+     0808080408
+     0808080808
+0A1A 0808100808        869     DB 08,08,16,08,08,08,08,08,08,08,08,16,08,08,08,08,08,08,04,08,08,08,08,08,16
+     0808080808
+     0810080808
+     0808080408
+     0808080810
+0A33 0802082008        870     DB 08,02,08,32,08,08,08,16,08,64,16,08,08,08,08,08,08,16,08,08,08,16,08,16,16
+     0808100840
+     1008080808
+     0808100808
+     0810081010
+0A4C 1008080810        871     DB 16,08,08,08,16,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08
+     0808080808
+     0808080808
+     0808080808
+     0808080808
+0A65 0808080808        872     DB 08,08,08,08,08,08,08,08,08,08,08,16,08,08,08,08,08,08,08,08,08,08,08,08,08
+     0808080808
+     0810080808
+     0808080808
+     0808080808
+0A7E 0808080808        873     DB 08,08,08,08,08,08,08,16,08,08,08,08,08,08,08,08,16,08,08,08,08,08,08,08,16
+     0808100808
+     0808080808
+     0810080808
+     0808080810
+0A97 0808080808        874     DB 08,08,08,08,08,08,08,08,08,08,08,08,16,16,16,16,16,32,16,08,08,08,08,16,08
+     0808080808
+     0808101010
+     1010201008
+     0808081008
+0AB0 0808080808        875     DB 08,08,08,08,08,08,32,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,16,08
+     0820080808
+     0808080808
+     0808080808
+     0808081008
+0AC9 0808080808        876     DB 08,08,08,08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,16,16,08,04,64,64,08
+     0808080808
+     0808080804
+     0808081010
+     0804404008
+0AE2 1008080808        877     DB 16,08,08,08,08,16,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08
+     1008080808
+     0808080808
+     0808080808
+     0808080808
+0AFB 1010040104        878     DB 16,16,04,01,04,16,08,04,08,08,08,16,16,08,08,08,16,08,04,08,08,16,02,02,04
+     1008040808
+     0810100808
+     0810080408
+     0810020204
+0B14 0808100402        879     DB 08,08,16,04,02,32,32,16,16,16,08,04,02,08,02,32,08,16,16,16,16,16,02,16,16
+     2020101010
+     0804020802
+     2008101010
+     1010021010
+0B2D 0408041008        880     DB 04,08,04,16,08,04,08,08,16,08,16,16,08,08,08,16,08,02,08,16,16,08,16,16,16
+     0408081008
+     1010080808
+     1008020810
+     1008101010
+0B46 0408101001        881     DB 04,08,16,16,01,01,16,08,08,04,16,01,32,08,08,04,16,04,02,01,08,32,02,04,16
+     0110080804
+     1001200808
+     0410040201
+     0820020410
+0B5F 1010101020        882     DB 16,16,16,16,32,16,16,16,16,16,16,16,02,16,16,16,04,08,08,16,02,02,04,08,04
+     1010101010
+     1010021010
+     1004080810
+     0202040804
+0B78 0810100101        883     DB 08,16,16,01,01,16,08,04,16,01,16,08,16,32,16,08,02,01,04,32,32,08,32,04,02
+     1008041001
+     1008102010
+     0802010420
+     2008200402
+0B91 0102080220        884     DB 01,02,08,02,32,04,16,16,16,16,16,04,16,16,04,08,08,16,08,04,04,08,08,08,08
+     0410101010
+     1004101004
+     0808100804
+     0408080808
+0BAA 0402020808        885     DB 04,02,02,08,08,08,08,04,08,01,04,08,08,08,08,02,01,08,16,08,08,08,16,32,32
+     0808040801
+     0408080808
+     0201081008
+     0808102020
+0BC3 2010201008        886     DB 32,16,32,16,08,08,08,08,08,16,08,08,08,08,08,08,08,64,08,32,08,08,08,08,08
+     0808080810
+     0808080808
+     0808400820
+     0808080808
+0BDC 2008080810        887     DB 32,08,08,08,16,16,08,08,04,02,08,08,08,08,16,16,04,16,08,08,08,16,04,08,08
+     1008080402
+     0808080810
+     1004100808
+     0810040808
+0BF5 0804040408        888     DB 08,04,04,04,08,08,08,08,08,08,08,08,32,08,08,04,08,32,08,32,16,08,16,04,08
+     0808080808
+     0808200808
+     0408200820
+     1008100408
+0C0E 0820081008        889     DB 08,32,08,16,08,16,04,08,08,08,08,32,08,08,08,16,16,08,08,08,04,04,02,32,08
+     1004080808
+     0820080808
+     1010080808
+     0404022008
+0C27 1004041010        890     DB 16,04,04,16,16,16,04,08,04,16,16,08,08,08,08,08,08,08,32,16,08,08,16,08,16
+     1004080410
+     1008080808
+     0808082010
+     0808100810
+0C40 0820100810        891     DB 08,32,16,08,16,16,08,16,08,08,16,16,16,16,08,16,08,16,16,04,08,04,16,08,04
+     1008100808
+     1010101008
+     1008101004
+     0804100804
+0C59 0808101010        892     DB 08,08,16,16,16,16,16,02,16,16,04,08,08,16,08,04,04,08,16,16,16,16,16,08,16
+     1010021010
+     0408081008
+     0404081010
+     1010100810
+0C72 1010080404        893     DB 16,16,08,04,04,08,02,32,08,16,16,16,16,16,02,16,16,16,16,16,16,16,04,16,16
+     0802200810
+     1010101002
+     1010101010
+     1010041010
+0C8B 0804100220        894     DB 08,04,16,02,32,02,02,02,02,02,08,08,08,08,04,08,08,08,16,02,32,02,02,02,02
+     0202020202
+     0808080804
+     0808081002
+     2002020202
+0CA4 0210022002        895     DB 02,16,02,32,02,02,02,02,02,04,08,08,08,04,16,08,08,08,08,08,08,04,08,08,08
+     0202020204
+     0808080410
+     0808080808
+     0804080808
+0CBD 1002200202        896     DB 16,02,32,02,02,02,02,02,08,08,08,08,08,04,08,08,08,08,08,08,08,16,08,08,08
+     0202020808
+     0808080408
+     0808080808
+     0810080808
+0CD6 0808080804        897     DB 08,08,08,08,04,08,08,08,08,08,02,04,02,16,02,08,08,08,08,08,08,08,08,08,08
+     0808080808
+     0204021002
+     0808080808
+     0808080808
+0CEF 0808080808        898     DB 08,08,08,08,08,08,08,04,08,16,08,04,04,08,64,08,08,08,08,08,04,08,08,08,08
+     0808040810
+     0804040840
+     0808080808
+     0408080808
+0D08 0808080408        899     DB 08,08,08,04,08,08,08,08,08,08,08,04,08,08,08,04,04,04,08,08,16,08,08,08,08
+     0808080808
+     0804080808
+     0404040808
+     1008080808
+0D21 0808040808        900     DB 08,08,04,08,08,08,08,08,08,08,04,08,08,08,08,08,08,08,04,08,08,08,08,08,08
+     0808080808
+     0408080808
+     0808080408
+     0808080808
+0D3A 0808040808        901     DB 08,08,04,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,02,04,04
+     0808080808
+     0808080808
+     0808080408
+     0808020404
+0D53 0404080404        902     DB 04,04,08,04,04,16,08,16,16,16,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08
+     1008101010
+     0808080808
+     0808080808
+     0808080808
+0D6C 0408084008        903     DB 04,08,08,64,08,08,08,08,08,16,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08
+     0808080810
+     0808080808
+     0808080808
+     0808080808
+0D85 0408080810        904     DB 04,08,08,08,16,16,08,04,64,64,08,16,08,08,08,08,16,08,08,08,08,08,08,08,08
+     1008044040
+     0810080808
+     0810080808
+     0808080808
+0D9E 0808080808        905     DB 08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,08,08,08,08,08
+     0808080808
+     0808080808
+     0804080808
+     0808080808
+0DB7 0808080808        906     DB 08,08,08,08,08,08,08,04,08,08,08,32,02,08,04,32,16,04,08,08,08,08,08,08,08
+     0808040808
+     0820020804
+     2010040808
+     0808080808
+0DD0 0808080808        907     DB 08,08,08,08,08,08,04,08,08,08,08,08,08,08,04,08,08,08,08,08,08,08,08,04,08
+     0804080808
+     0808080804
+     0808080808
+     0808080408
+0DE9 0808040810        908     DB 08,08,04,08,16,08,04,04,08,64,08,08,08,08,04,08,08,08,04,16,04,16,16,04,02
+     0804040840
+     0808080804
+     0808080410
+     0410100402
+0E02 4008080808        909     DB 64,08,08,08,08,08,08,08,08,08,08,08,08,04,08,08,08,64,04,08,08,04,08,08,04
+     0808080808
+     0808080408
+     0808400408
+     0804080804
+                       910
+                       911     ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                       912     END
+ASSEMBLY COMPLETE, NO ERRORS FOUND, NO WARNINGS
+
+
+SYMBOL TABLE:
+??MCU_8051_IDE . . . . . . . . . . .  N  NUMB  8051H  NOT USED
+??VERSION. . . . . . . . . . . . . .  N  NUMB  0149H  NOT USED
+AC . . . . . . . . . . . . . . . . .  B  ADDR  00D6H  NOT USED
+ACC. . . . . . . . . . . . . . . . .  D  ADDR  00E0H
+ACSR . . . . . . . . . . . . . . . .  D  ADDR  0097H  NOT USED
+ADCF . . . . . . . . . . . . . . . .  D  ADDR  00F6H  NOT USED
+ADCLK. . . . . . . . . . . . . . . .  D  ADDR  00F2H  NOT USED
+ADCON. . . . . . . . . . . . . . . .  D  ADDR  00F3H  NOT USED
+ADDH . . . . . . . . . . . . . . . .  D  ADDR  00F5H  NOT USED
+ADDL . . . . . . . . . . . . . . . .  D  ADDR  00F4H  NOT USED
+AUXR . . . . . . . . . . . . . . . .  D  ADDR  008EH  NOT USED
+AUXR1. . . . . . . . . . . . . . . .  D  ADDR  00A2H  NOT USED
+B. . . . . . . . . . . . . . . . . .  D  ADDR  00F0H  NOT USED
+BDRCON . . . . . . . . . . . . . . .  D  ADDR  009BH  NOT USED
+BDRCON_1 . . . . . . . . . . . . . .  D  ADDR  009CH  NOT USED
+BEST_MOVE. . . . . . . . . . . . . .  N  NUMB  000FH
+BRL. . . . . . . . . . . . . . . . .  D  ADDR  009AH  NOT USED
+CCAP0H . . . . . . . . . . . . . . .  D  ADDR  00FAH  NOT USED
+CCAP0L . . . . . . . . . . . . . . .  D  ADDR  00EAH  NOT USED
+CCAP1H . . . . . . . . . . . . . . .  D  ADDR  00FBH  NOT USED
+CCAP1L . . . . . . . . . . . . . . .  D  ADDR  00EBH  NOT USED
+CCAP2H . . . . . . . . . . . . . . .  D  ADDR  00FCH  NOT USED
+CCAP3H . . . . . . . . . . . . . . .  D  ADDR  00FDH  NOT USED
+CCAP4H . . . . . . . . . . . . . . .  D  ADDR  00FEH  NOT USED
+CCAPL2H. . . . . . . . . . . . . . .  D  ADDR  00FCH  NOT USED
+CCAPL2L. . . . . . . . . . . . . . .  D  ADDR  00ECH  NOT USED
+CCAPL3H. . . . . . . . . . . . . . .  D  ADDR  00FDH  NOT USED
+CCAPL3L. . . . . . . . . . . . . . .  D  ADDR  00EDH  NOT USED
+CCAPL4H. . . . . . . . . . . . . . .  D  ADDR  00FEH  NOT USED
+CCAPL4L. . . . . . . . . . . . . . .  D  ADDR  00EEH  NOT USED
+CCAPM0 . . . . . . . . . . . . . . .  D  ADDR  00DAH  NOT USED
+CCAPM1 . . . . . . . . . . . . . . .  D  ADDR  00DBH  NOT USED
+CCAPM2 . . . . . . . . . . . . . . .  D  ADDR  00DCH  NOT USED
+CCAPM3 . . . . . . . . . . . . . . .  D  ADDR  00DDH  NOT USED
+CCAPM4 . . . . . . . . . . . . . . .  D  ADDR  00DEH  NOT USED
+CCF0 . . . . . . . . . . . . . . . .  B  ADDR  00D8H  NOT USED
+CCF1 . . . . . . . . . . . . . . . .  B  ADDR  00D9H  NOT USED
+CCF2 . . . . . . . . . . . . . . . .  B  ADDR  00DAH  NOT USED
+CCF3 . . . . . . . . . . . . . . . .  B  ADDR  00DBH  NOT USED
+CCF4 . . . . . . . . . . . . . . . .  B  ADDR  00DCH  NOT USED
+CCON . . . . . . . . . . . . . . . .  D  ADDR  00D8H  NOT USED
+CFINT. . . . . . . . . . . . . . . .  C  ADDR  0033H  NOT USED
+CH . . . . . . . . . . . . . . . . .  D  ADDR  00F9H  NOT USED
+CKCON. . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
+CKCON0 . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
+CKRL . . . . . . . . . . . . . . . .  D  ADDR  0097H  NOT USED
+CKSEL. . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
+CL . . . . . . . . . . . . . . . . .  D  ADDR  00E9H  NOT USED
+CLKREG . . . . . . . . . . . . . . .  D  ADDR  008FH  NOT USED
+CMOD . . . . . . . . . . . . . . . .  D  ADDR  00D9H  NOT USED
+COL. . . . . . . . . . . . . . . . .  N  NUMB  0010H
+CPRL2. . . . . . . . . . . . . . . .  B  ADDR  00C8H  NOT USED
+CR . . . . . . . . . . . . . . . . .  B  ADDR  00DEH  NOT USED
+CT2. . . . . . . . . . . . . . . . .  B  ADDR  00C9H  NOT USED
+CY . . . . . . . . . . . . . . . . .  B  ADDR  00D7H  NOT USED
+DA_LOOP_0. . . . . . . . . . . . . .  C  ADDR  0320H
+DA_LOOP_1. . . . . . . . . . . . . .  C  ADDR  0322H
+DA_LOOP_2. . . . . . . . . . . . . .  C  ADDR  0324H
+DELAY_ACC. . . . . . . . . . . . . .  C  ADDR  031FH
+DEPTH. . . . . . . . . . . . . . . .  N  NUMB  0008H
+DEPTH_INIT . . . . . . . . . . . . .  N  NUMB  0009H
+DP0H . . . . . . . . . . . . . . . .  D  ADDR  0083H  NOT USED
+DP0L . . . . . . . . . . . . . . . .  D  ADDR  0082H  NOT USED
+DP1H . . . . . . . . . . . . . . . .  D  ADDR  0085H  NOT USED
+DP1L . . . . . . . . . . . . . . . .  D  ADDR  0084H  NOT USED
+DPH. . . . . . . . . . . . . . . . .  D  ADDR  0083H
+DPL. . . . . . . . . . . . . . . . .  D  ADDR  0082H
+EA . . . . . . . . . . . . . . . . .  B  ADDR  00AFH  NOT USED
+EC . . . . . . . . . . . . . . . . .  B  ADDR  00AEH  NOT USED
+EECON. . . . . . . . . . . . . . . .  D  ADDR  0096H  NOT USED
+ES . . . . . . . . . . . . . . . . .  B  ADDR  00ACH  NOT USED
+ET0. . . . . . . . . . . . . . . . .  B  ADDR  00A9H  NOT USED
+ET1. . . . . . . . . . . . . . . . .  B  ADDR  00ABH  NOT USED
+ET2. . . . . . . . . . . . . . . . .  B  ADDR  00ADH  NOT USED
+EVALUATE . . . . . . . . . . . . . .  C  ADDR  01C1H
+EVALUATE_WIN . . . . . . . . . . . .  C  ADDR  0122H
+EVALUATE_WIN_LOOPER. . . . . . . . .  C  ADDR  018AH
+EV_COL_LOOP. . . . . . . . . . . . .  C  ADDR  01CEH
+EV_COL_SKIP. . . . . . . . . . . . .  C  ADDR  01D9H
+EV_COL_SKIP2 . . . . . . . . . . . .  C  ADDR  01DFH
+EV_CONTINUE. . . . . . . . . . . . .  C  ADDR  01E1H
+EV_ROW_LOOP. . . . . . . . . . . . .  C  ADDR  01CCH
+EV_SCORE_LUT . . . . . . . . . . . .  C  ADDR  001DH
+EWL_COL_SKIP . . . . . . . . . . . .  C  ADDR  01BBH
+EWL_HORIZONTAL_DIR_SKIP. . . . . . .  C  ADDR  0197H
+EWL_HORIZONTAL_SKIP. . . . . . . . .  C  ADDR  019EH
+EWL_RETURN . . . . . . . . . . . . .  C  ADDR  01C0H
+EWL_VERICAL_DIR_SKIP . . . . . . . .  C  ADDR  01AAH
+EWL_VERTICAL_SKIP. . . . . . . . . .  C  ADDR  01B0H
+EW_RETURN. . . . . . . . . . . . . .  C  ADDR  0188H
+EX0. . . . . . . . . . . . . . . . .  B  ADDR  00A8H  NOT USED
+EX1. . . . . . . . . . . . . . . . .  B  ADDR  00AAH  NOT USED
+EXEN2. . . . . . . . . . . . . . . .  B  ADDR  00CBH  NOT USED
+EXF2 . . . . . . . . . . . . . . . .  B  ADDR  00CEH  NOT USED
+EXTI0. . . . . . . . . . . . . . . .  C  ADDR  0003H  NOT USED
+EXTI1. . . . . . . . . . . . . . . .  C  ADDR  0013H  NOT USED
+F0 . . . . . . . . . . . . . . . . .  B  ADDR  00D5H  NOT USED
+FE . . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
+IE . . . . . . . . . . . . . . . . .  D  ADDR  00A8H
+IE0. . . . . . . . . . . . . . . . .  B  ADDR  0089H  NOT USED
+IE1. . . . . . . . . . . . . . . . .  B  ADDR  008BH  NOT USED
+INT0 . . . . . . . . . . . . . . . .  B  ADDR  00B2H  NOT USED
+INT1 . . . . . . . . . . . . . . . .  B  ADDR  00B3H  NOT USED
+IP . . . . . . . . . . . . . . . . .  D  ADDR  00B8H  NOT USED
+IPH. . . . . . . . . . . . . . . . .  D  ADDR  00B7H  NOT USED
+IPH0 . . . . . . . . . . . . . . . .  D  ADDR  00B7H  NOT USED
+IPH1 . . . . . . . . . . . . . . . .  D  ADDR  00B3H  NOT USED
+IPL0 . . . . . . . . . . . . . . . .  D  ADDR  00B8H  NOT USED
+IPL1 . . . . . . . . . . . . . . . .  D  ADDR  00B2H  NOT USED
+IR_READER_PORT . . . . . . . . . . .  N  NUMB  0090H
+IT0. . . . . . . . . . . . . . . . .  B  ADDR  0088H  NOT USED
+IT1. . . . . . . . . . . . . . . . .  B  ADDR  008AH  NOT USED
+KBE. . . . . . . . . . . . . . . . .  D  ADDR  009DH  NOT USED
+KBF. . . . . . . . . . . . . . . . .  D  ADDR  009EH  NOT USED
+KBLS . . . . . . . . . . . . . . . .  D  ADDR  009CH  NOT USED
+LAST_MOVE. . . . . . . . . . . . . .  N  NUMB  001FH
+LAST_ROW_COL . . . . . . . . . . . .  N  NUMB  001EH
+LAST_ROW_DAT . . . . . . . . . . . .  N  NUMB  0016H
+LED_PIN. . . . . . . . . . . . . . .  N  NUMB  00A0H
+MAIN . . . . . . . . . . . . . . . .  C  ADDR  0065H
+MAIN_HALT. . . . . . . . . . . . . .  C  ADDR  00D6H
+MAIN_LOOP. . . . . . . . . . . . . .  C  ADDR  007EH
+MAKE_MOVE. . . . . . . . . . . . . .  C  ADDR  00EEH
+MBOOK_DEPTH. . . . . . . . . . . . .  S  SPEC  R7
+MBOOK_DPTR_H . . . . . . . . . . . .  S  SPEC  R5
+MBOOK_DPTR_L . . . . . . . . . . . .  S  SPEC  R6
+MBOOK_FINISHED . . . . . . . . . . .  N  NUMB  0008H
+MB_BOOK_DEPTH. . . . . . . . . . . .  N  NUMB  0004H
+MB_BOOK_LUT. . . . . . . . . . . . .  C  ADDR  032BH
+MB_CARRY_SKIP. . . . . . . . . . . .  C  ADDR  02B9H
+MB_DPTR_INC_BREAK. . . . . . . . . .  C  ADDR  02ACH
+MB_DPTR_INC_CONTINUE . . . . . . . .  C  ADDR  02A4H
+MB_DPTR_INC_LOOP . . . . . . . . . .  C  ADDR  029CH
+MB_INCREMENT_LUT_H . . . . . . . . .  C  ADDR  004FH
+MB_INCREMENT_LUT_L . . . . . . . . .  C  ADDR  0053H
+MM_RETURN. . . . . . . . . . . . . .  C  ADDR  0108H
+MM_SEARCH. . . . . . . . . . . . . .  C  ADDR  00F3H
+MOVE_BOOK. . . . . . . . . . . . . .  C  ADDR  0285H
+MOVE_INDEX_LOOP. . . . . . . . . . .  C  ADDR  00A4H
+NEGAMAX. . . . . . . . . . . . . . .  C  ADDR  01EFH
+NEGAMAX_CASE . . . . . . . . . . . .  C  ADDR  009BH
+NEGAMAX_CASE_SKIP. . . . . . . . . .  C  ADDR  009FH
+NEGAMAX_SETUP. . . . . . . . . . . .  C  ADDR  026BH
+NG_ALPHA_COMP_SKIP . . . . . . . . .  C  ADDR  0256H
+NG_DEPTH_SKIP. . . . . . . . . . . .  C  ADDR  0209H
+NG_MOVE_LOOP . . . . . . . . . . . .  C  ADDR  020DH
+NG_MOVE_LOOP_CONT. . . . . . . . . .  C  ADDR  0263H
+NG_MOVE_SKIP . . . . . . . . . . . .  C  ADDR  0202H
+NG_SCORE_COMP_SKIP . . . . . . . . .  C  ADDR  024DH
+NG_WIN_SKIP. . . . . . . . . . . . .  C  ADDR  01FAH
+NS_DEPTH_LUT . . . . . . . . . . . .  C  ADDR  0047H
+NS_LOOP. . . . . . . . . . . . . . .  C  ADDR  0271H
+NS_LOOP_CONT . . . . . . . . . . . .  C  ADDR  0275H
+OSCCON . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
+OV . . . . . . . . . . . . . . . . .  B  ADDR  00D2H  NOT USED
+P. . . . . . . . . . . . . . . . . .  B  ADDR  00D0H  NOT USED
+P0 . . . . . . . . . . . . . . . . .  D  ADDR  0080H  NOT USED
+P1 . . . . . . . . . . . . . . . . .  D  ADDR  0090H  NOT USED
+P1M1 . . . . . . . . . . . . . . . .  D  ADDR  00D4H  NOT USED
+P1M2 . . . . . . . . . . . . . . . .  D  ADDR  00E2H  NOT USED
+P2 . . . . . . . . . . . . . . . . .  D  ADDR  00A0H  NOT USED
+P3 . . . . . . . . . . . . . . . . .  D  ADDR  00B0H  NOT USED
+P3M1 . . . . . . . . . . . . . . . .  D  ADDR  00D5H  NOT USED
+P3M2 . . . . . . . . . . . . . . . .  D  ADDR  00E3H  NOT USED
+P4 . . . . . . . . . . . . . . . . .  D  ADDR  00C0H  NOT USED
+P4M1 . . . . . . . . . . . . . . . .  D  ADDR  00D6H  NOT USED
+P4M2 . . . . . . . . . . . . . . . .  D  ADDR  00E4H  NOT USED
+P5 . . . . . . . . . . . . . . . . .  D  ADDR  00E8H  NOT USED
+PC . . . . . . . . . . . . . . . . .  B  ADDR  00BEH  NOT USED
+PCON . . . . . . . . . . . . . . . .  D  ADDR  0087H  NOT USED
+PERIOD_INTERRUPT . . . . . . . . . .  C  ADDR  02EFH
+PPCL . . . . . . . . . . . . . . . .  B  ADDR  00BEH  NOT USED
+PS . . . . . . . . . . . . . . . . .  B  ADDR  00BCH  NOT USED
+PSL. . . . . . . . . . . . . . . . .  B  ADDR  00BCH  NOT USED
+PSW. . . . . . . . . . . . . . . . .  D  ADDR  00D0H  NOT USED
+PT0. . . . . . . . . . . . . . . . .  B  ADDR  00B9H  NOT USED
+PT0L . . . . . . . . . . . . . . . .  B  ADDR  00B9H  NOT USED
+PT1. . . . . . . . . . . . . . . . .  B  ADDR  00BBH  NOT USED
+PT1L . . . . . . . . . . . . . . . .  B  ADDR  00BBH  NOT USED
+PT2. . . . . . . . . . . . . . . . .  B  ADDR  00BDH  NOT USED
+PT2L . . . . . . . . . . . . . . . .  B  ADDR  00BDH  NOT USED
+PX0. . . . . . . . . . . . . . . . .  B  ADDR  00B8H  NOT USED
+PX0L . . . . . . . . . . . . . . . .  B  ADDR  00B8H  NOT USED
+PX1. . . . . . . . . . . . . . . . .  B  ADDR  00BAH  NOT USED
+PX1L . . . . . . . . . . . . . . . .  B  ADDR  00BAH  NOT USED
+RB8. . . . . . . . . . . . . . . . .  B  ADDR  009AH  NOT USED
+RCAP2H . . . . . . . . . . . . . . .  D  ADDR  00CBH  NOT USED
+RCAP2L . . . . . . . . . . . . . . .  D  ADDR  00CAH  NOT USED
+RCLK . . . . . . . . . . . . . . . .  B  ADDR  00CDH  NOT USED
+RD . . . . . . . . . . . . . . . . .  B  ADDR  00B7H  NOT USED
+REN. . . . . . . . . . . . . . . . .  B  ADDR  009CH  NOT USED
+RESET. . . . . . . . . . . . . . . .  C  ADDR  0000H  NOT USED
+RESET_GAME . . . . . . . . . . . . .  C  ADDR  00DEH
+RG_LOOP. . . . . . . . . . . . . . .  C  ADDR  00E2H
+RI . . . . . . . . . . . . . . . . .  B  ADDR  0098H  NOT USED
+ROW_COL. . . . . . . . . . . . . . .  N  NUMB  0018H
+ROW_COL_BEG. . . . . . . . . . . . .  N  NUMB  0017H
+ROW_COL_END. . . . . . . . . . . . .  N  NUMB  001EH
+ROW_COL_LST. . . . . . . . . . . . .  N  NUMB  001DH  NOT USED
+ROW_DAT. . . . . . . . . . . . . . .  N  NUMB  0010H
+ROW_DAT_BEG. . . . . . . . . . . . .  N  NUMB  000FH
+ROW_DAT_END. . . . . . . . . . . . .  N  NUMB  0016H
+ROW_DAT_LST. . . . . . . . . . . . .  N  NUMB  0015H
+RS0. . . . . . . . . . . . . . . . .  B  ADDR  00D3H  NOT USED
+RS1. . . . . . . . . . . . . . . . .  B  ADDR  00D4H  NOT USED
+RXD. . . . . . . . . . . . . . . . .  B  ADDR  00B0H  NOT USED
+SADDR. . . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
+SADDR_0. . . . . . . . . . . . . . .  D  ADDR  00A9H  NOT USED
+SADDR_1. . . . . . . . . . . . . . .  D  ADDR  00AAH  NOT USED
+SADEN. . . . . . . . . . . . . . . .  D  ADDR  00B9H  NOT USED
+SADEN_0. . . . . . . . . . . . . . .  D  ADDR  00B9H  NOT USED
+SADEN_1. . . . . . . . . . . . . . .  D  ADDR  00BAH  NOT USED
+SBUF . . . . . . . . . . . . . . . .  D  ADDR  0099H  NOT USED
+SCAN_IR_READER . . . . . . . . . . .  C  ADDR  030EH
+SCON . . . . . . . . . . . . . . . .  D  ADDR  0098H  NOT USED
+SERVO_COLLECT_H. . . . . . . . . . .  N  NUMB  00F7H
+SERVO_COLLECT_L. . . . . . . . . . .  N  NUMB  0040H
+SERVO_CONT_PIN . . . . . . . . . . .  N  NUMB  00B3H
+SERVO_DISP_H . . . . . . . . . . . .  N  NUMB  000AH
+SERVO_DISP_L . . . . . . . . . . . .  N  NUMB  000BH
+SERVO_DISP_PIN . . . . . . . . . . .  N  NUMB  00B0H
+SERVO_DROP_H . . . . . . . . . . . .  N  NUMB  00FDH
+SERVO_DROP_L . . . . . . . . . . . .  N  NUMB  0090H
+SERVO_RAIL_H . . . . . . . . . . . .  N  NUMB  000CH
+SERVO_RAIL_L . . . . . . . . . . . .  N  NUMB  000DH
+SERVO_RAIL_LUT_H . . . . . . . . . .  C  ADDR  0057H
+SERVO_RAIL_LUT_L . . . . . . . . . .  C  ADDR  005EH
+SERVO_RAIL_PIN . . . . . . . . . . .  N  NUMB  00B1H
+SERVO_RAIL_WRITE . . . . . . . . . .  C  ADDR  02DEH
+SERVO_SETUP. . . . . . . . . . . . .  C  ADDR  02BAH
+SINT . . . . . . . . . . . . . . . .  C  ADDR  0023H  NOT USED
+SM0. . . . . . . . . . . . . . . . .  B  ADDR  009FH  NOT USED
+SM1. . . . . . . . . . . . . . . . .  B  ADDR  009EH  NOT USED
+SM2. . . . . . . . . . . . . . . . .  B  ADDR  009DH  NOT USED
+SP . . . . . . . . . . . . . . . . .  D  ADDR  0081H
+SPCON. . . . . . . . . . . . . . . .  D  ADDR  00C3H  NOT USED
+SPCR . . . . . . . . . . . . . . . .  D  ADDR  00D5H  NOT USED
+SPDAT. . . . . . . . . . . . . . . .  D  ADDR  00C5H  NOT USED
+SPDR . . . . . . . . . . . . . . . .  D  ADDR  0086H  NOT USED
+SPSR . . . . . . . . . . . . . . . .  D  ADDR  00AAH  NOT USED
+SPSTA. . . . . . . . . . . . . . . .  D  ADDR  00C4H  NOT USED
+STCK_PTR_INIT. . . . . . . . . . . .  N  NUMB  002FH
+T0 . . . . . . . . . . . . . . . . .  B  ADDR  00B4H  NOT USED
+T1 . . . . . . . . . . . . . . . . .  B  ADDR  00B5H  NOT USED
+T2CON. . . . . . . . . . . . . . . .  D  ADDR  00C8H  NOT USED
+T2MOD. . . . . . . . . . . . . . . .  D  ADDR  00C9H  NOT USED
+TB8. . . . . . . . . . . . . . . . .  B  ADDR  009BH  NOT USED
+TCLK . . . . . . . . . . . . . . . .  B  ADDR  00CCH  NOT USED
+TCON . . . . . . . . . . . . . . . .  D  ADDR  0088H
+TF0. . . . . . . . . . . . . . . . .  B  ADDR  008DH  NOT USED
+TF1. . . . . . . . . . . . . . . . .  B  ADDR  008FH  NOT USED
+TF2. . . . . . . . . . . . . . . . .  B  ADDR  00CFH  NOT USED
+TH0. . . . . . . . . . . . . . . . .  D  ADDR  008CH
+TH1. . . . . . . . . . . . . . . . .  D  ADDR  008DH
+TH2. . . . . . . . . . . . . . . . .  D  ADDR  00CDH  NOT USED
+TI . . . . . . . . . . . . . . . . .  B  ADDR  0099H  NOT USED
+TIMER0 . . . . . . . . . . . . . . .  C  ADDR  000BH  NOT USED
+TIMER0_INTERRUPT . . . . . . . . . .  C  ADDR  02F8H
+TIMER1 . . . . . . . . . . . . . . .  C  ADDR  001BH  NOT USED
+TIMER1_INTERRUPT . . . . . . . . . .  C  ADDR  0303H
+TIMER2 . . . . . . . . . . . . . . .  C  ADDR  002BH  NOT USED
+TL0. . . . . . . . . . . . . . . . .  D  ADDR  008AH
+TL1. . . . . . . . . . . . . . . . .  D  ADDR  008BH
+TL2. . . . . . . . . . . . . . . . .  D  ADDR  00CCH  NOT USED
+TMOD . . . . . . . . . . . . . . . .  D  ADDR  0089H
+TR0. . . . . . . . . . . . . . . . .  B  ADDR  008CH
+TR1. . . . . . . . . . . . . . . . .  B  ADDR  008EH
+TR2. . . . . . . . . . . . . . . . .  B  ADDR  00CAH  NOT USED
+TXD. . . . . . . . . . . . . . . . .  B  ADDR  00B1H  NOT USED
+UM_RETURN. . . . . . . . . . . . . .  C  ADDR  011FH
+UM_SEARCH. . . . . . . . . . . . . .  C  ADDR  0110H
+UNDO_MOVE. . . . . . . . . . . . . .  C  ADDR  010BH
+WDTCON . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
+WDTPRG . . . . . . . . . . . . . . .  D  ADDR  00A7H  NOT USED
+WDTRST . . . . . . . . . . . . . . .  D  ADDR  00A6H  NOT USED
+WIR_DEBOUNCE . . . . . . . . . . . .  C  ADDR  0315H
+WIR_DELAY. . . . . . . . . . . . . .  C  ADDR  0317H
+WR . . . . . . . . . . . . . . . . .  B  ADDR  00B6H  NOT USED
